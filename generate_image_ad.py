@@ -208,24 +208,80 @@ def run_single_image_narration(model_path: str, image_file: str, user_desc: str)
         print(f"[錯誤] 讀取或編碼圖片失敗: {e}", file=sys.stderr)
         sys.exit(1)
 
-    texts = [user_desc.strip()]
-    imgs = [img_b64]
+    # 從同層資料夾 data/source_images 與 data/source_texts 建立檢索資料庫
+    def _read_text_file(path: str):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+        except UnicodeDecodeError:
+            try:
+                with open(path, "r", encoding="utf-8-sig") as f:
+                    return f.read()
+            except Exception:
+                with open(path, "r", encoding="gbk", errors="ignore") as f:
+                    return f.read()
+
+    def _load_pairs_from_data_dirs():
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        data_dir = os.path.join(base_dir, "data")
+        img_dir = os.path.join(data_dir, "source_images")
+        txt_dir = os.path.join(data_dir, "source_texts")
+
+        if not os.path.isdir(img_dir) or not os.path.isdir(txt_dir):
+            print("[警告] 找不到 data/source_images 或 data/source_texts，將僅使用單張圖片與使用者描述。")
+            return [], []
+
+        text_map = {}
+        for fn in os.listdir(txt_dir):
+            if fn.lower().endswith(".txt"):
+                stem = os.path.splitext(fn)[0]
+                fp = os.path.join(txt_dir, fn)
+                try:
+                    text_map[stem] = _read_text_file(fp).strip()
+                except Exception as e:
+                    print(f"[警告] 讀取文字檔失敗: {fp}，{e}")
+
+        exts = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+        texts, imgs = [], []
+        for fn in sorted(os.listdir(img_dir)):
+            if fn.lower().endswith(exts):
+                stem = os.path.splitext(fn)[0]
+                if stem in text_map:
+                    img_fp = os.path.join(img_dir, fn)
+                    try:
+                        imgs.append(encode_image_to_base64(img_fp))
+                        texts.append(text_map[stem])
+                    except Exception as e:
+                        print(f"[警告] 載入或編碼圖片失敗: {img_fp}，{e}")
+                else:
+                    print(f"[警告] 找不到與圖片對應的文字檔：{fn}，已略過。")
+
+        print(f"已從資料夾載入 {len(imgs)} 組圖片/文字配對。")
+        return texts, imgs
+
+    data_texts, data_imgs = _load_pairs_from_data_dirs()
+
+    # 將使用者當前選擇的圖片 + 描述也加入資料庫
+    texts = list(data_texts) + [user_desc.strip()]
+    imgs = list(data_imgs) + [img_b64]
 
     retriever = set_DB(texts, imgs)
     if not retriever:
         print("[錯誤] 設定 RAG 檢索器失敗。", file=sys.stderr)
         sys.exit(1)
 
-    user_question = "請根據圖片與上述重點生成一段口述影像。"
-    print(f"\n正在針對問題進行檢索: '{user_question}'")
+    # 使用使用者的描述作為檢索查詢，確保能檢索到當前圖片
+    retrieval_query = user_desc.strip()
+    final_question = "請根據圖片與上述重點生成一段口述影像。"
+    print(f"\n正在針對描述進行檢索: '{retrieval_query}'")
     try:
-        retrieved_docs = retriever.invoke(user_question)
+        retrieved_docs = retriever.invoke(retrieval_query)
     except Exception as e:
         print(f"[錯誤] 執行檢索時失敗: {e}", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
         retrieved_docs = []
 
-    llama_images, llama_messages = get_llama_vision_inputs_from_docs(user_question, retrieved_docs)
+    llama_images, llama_messages = get_llama_vision_inputs_from_docs(final_question, retrieved_docs)
 
     try:
         input_text_for_processor = processor.apply_chat_template(
