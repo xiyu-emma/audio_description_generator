@@ -38,6 +38,7 @@ video_button = None
 image_preview_label = None
 narration_output_widget = None
 video_preview_label = None
+progress_bar = None
 
 # 圖像/影片暫存資訊
 _last_selected_image_path = None
@@ -63,6 +64,80 @@ def update_status_safe(text):
             status_label_var.set(text)
         except tk.TclError:
             pass
+
+# 簡易工具提示類別，為按鈕提供滑鼠懸停說明
+class ToolTip:
+    def __init__(self, widget, text: str, delay: int = 500):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self.tipwindow = None
+        self._id = None
+        widget.bind("<Enter>", self._enter)
+        widget.bind("<Leave>", self._leave)
+        widget.bind("<ButtonPress>", self._leave)
+
+    def _enter(self, event=None):
+        self._schedule()
+
+    def _leave(self, event=None):
+        self._unschedule()
+        self._hidetip()
+
+    def _schedule(self):
+        self._unschedule()
+        self._id = self.widget.after(self.delay, self._showtip)
+
+    def _unschedule(self):
+        if self._id:
+            try:
+                self.widget.after_cancel(self._id)
+            except tk.TclError:
+                pass
+            self._id = None
+
+    def _showtip(self, event=None):
+        if self.tipwindow or not self.text:
+            return
+        try:
+            bbox = self.widget.bbox("insert") if hasattr(self.widget, "bbox") else None
+        except Exception:
+            bbox = None
+        if bbox:
+            x, y, cx, cy = bbox
+        else:
+            x, y, cx, cy = 0, 0, 0, 0
+        x = x + self.widget.winfo_rootx() + 20
+        y = y + cy + self.widget.winfo_rooty() + 20
+        self.tipwindow = tw = tk.Toplevel(self.widget)
+        try:
+            tw.wm_overrideredirect(1)
+        except Exception:
+            pass
+        tw.configure(bg="#111827")
+        label = tk.Label(
+            tw,
+            text=self.text,
+            justify=tk.LEFT,
+            background="#111827",
+            foreground="white",
+            relief=tk.SOLID,
+            borderwidth=1,
+            font=("Helvetica", 9),
+            padx=6,
+            pady=3,
+        )
+        label.pack()
+        tw.wm_geometry("+%d+%d" % (x, y))
+
+    def _hidetip(self):
+        tw = self.tipwindow
+        self.tipwindow = None
+        if tw:
+            try:
+                tw.destroy()
+            except Exception:
+                pass
 
 # 視覺輸出輔助
 def show_image_and_text(image_path: str, narration_text: str):
@@ -271,6 +346,7 @@ def run_script_in_thread(script_name: str, script_type: str, args: list):
     finally:
         if app_window:
             app_window.after(100, enable_buttons)
+            app_window.after(0, set_busy, False)
 
 
 def enable_buttons():
@@ -280,6 +356,29 @@ def enable_buttons():
     except tk.TclError:
         pass
 
+
+def set_busy(is_busy: bool):
+    global app_window, progress_bar
+    if not app_window or progress_bar is None:
+        return
+    try:
+        if is_busy:
+            # Place progress bar above status bar
+            progress_bar.pack(side=tk.BOTTOM, fill=tk.X)
+            try:
+                progress_bar.start(10)
+            except Exception:
+                pass
+            app_window.configure(cursor='watch')
+        else:
+            try:
+                progress_bar.stop()
+            except Exception:
+                pass
+            progress_bar.pack_forget()
+            app_window.configure(cursor='')
+    except tk.TclError:
+        pass
 
 # --- 啟動流程 ---
 def start_image_analysis():
@@ -326,6 +425,7 @@ def start_image_analysis():
         "--desc", desc
     ]
 
+    set_busy(True)
     thread = threading.Thread(
         target=run_script_in_thread,
         args=('generate_image_ad.py', '圖像', args),
@@ -350,6 +450,7 @@ def start_video_analysis():
     video_button.config(state=tk.DISABLED)
 
     args = []
+    set_busy(True)
     thread = threading.Thread(
         target=run_script_in_thread,
         args=('generate_video_ad.py', '影片', args),
@@ -396,29 +497,78 @@ def create_gui():
     global result_text_widget, status_label_var, app_window
     global image_button, video_button
     global image_preview_label, narration_output_widget, video_preview_label
+    global progress_bar
 
     root = tk.Tk()
     app_window = root
     root.title("口述影像生成系統")
-    root.geometry("900x720")
+    root.geometry("1000x780")
+    root.minsize(900, 680)
 
+    # 主題與色彩配置
     style = ttk.Style()
-    style.configure("TButton", font=("Helvetica", 12), padding=5)
-    style.configure("TLabel", font=("Helvetica", 10))
+    try:
+        style.theme_use("clam")
+    except Exception:
+        pass
 
-    main_frame = ttk.Frame(root, padding="12")
+    ACCENT = "#4F46E5"
+    ACCENT_HOVER = "#4338CA"
+    BG = "#F8FAFC"
+    TEXT = "#111827"
+    SUBTEXT = "#6B7280"
+
+    try:
+        root.configure(background=BG)
+    except tk.TclError:
+        pass
+
+    # 基礎樣式
+    style.configure("TFrame", background=BG)
+    style.configure("TLabel", background=BG, foreground=TEXT, font=("Helvetica", 10))
+    style.configure("Header.TLabel", background=BG, foreground=TEXT, font=("Helvetica", 20, "bold"))
+    style.configure("SubHeader.TLabel", background=BG, foreground=SUBTEXT, font=("Helvetica", 11))
+    style.configure("TLabelFrame", background=BG, foreground=TEXT, padding=10)
+    style.configure("TLabelFrame.Label", background=BG, foreground=TEXT)
+    style.configure("TButton", font=("Helvetica", 12), padding=(12, 10))
+    style.configure("Primary.TButton", background=ACCENT, foreground="white")
+    style.map(
+        "Primary.TButton",
+        background=[("active", ACCENT_HOVER), ("disabled", "#9CA3AF")],
+        foreground=[("disabled", "#E5E7EB")],
+    )
+    style.configure("Secondary.TButton", background="#E5E7EB", foreground=TEXT)
+    style.map("Secondary.TButton", background=[("active", "#D1D5DB")])
+    style.configure("Horizontal.TProgressbar", troughcolor="#E5E7EB", background=ACCENT)
+    style.configure("Status.TLabel", background="#111827", foreground="white")
+
+    # 主要容器
+    main_frame = ttk.Frame(root, padding=16)
     main_frame.pack(expand=True, fill="both")
+
+    # 標題區
+    header_label = ttk.Label(main_frame, text="口述影像生成系統", style="Header.TLabel")
+    header_label.pack(anchor="w")
+    subheader_label = ttk.Label(main_frame, text="為視障者提供友善的圖像與影片旁白", style="SubHeader.TLabel")
+    subheader_label.pack(anchor="w", pady=(0, 10))
 
     # 兩個主按鈕
     btn_frame = ttk.Frame(main_frame)
-    btn_frame.pack(fill="x")
-    image_button = ttk.Button(btn_frame, text="生成圖像口述影像", command=start_image_analysis)
+    btn_frame.pack(fill="x", pady=(4, 8))
+    image_button = ttk.Button(btn_frame, text="🖼️ 生成圖像口述影像", command=start_image_analysis, style="Primary.TButton")
     image_button.pack(side="left", expand=True, fill="x", padx=(0, 6))
-    video_button = ttk.Button(btn_frame, text="生成影片口述影像", command=start_video_analysis)
+    video_button = ttk.Button(btn_frame, text="🎬 生成影片口述影像", command=start_video_analysis, style="Primary.TButton")
     video_button.pack(side="left", expand=True, fill="x", padx=(6, 0))
 
+    # 工具提示
+    try:
+        ToolTip(image_button, "上傳一張圖片並生成口述影像")
+        ToolTip(video_button, "偵測影片重點並生成口述影像")
+    except Exception:
+        pass
+
     # 圖像 + 文字輸出區
-    preview_frame = ttk.LabelFrame(main_frame, text="圖像預覽與口述影像文字", padding="10")
+    preview_frame = ttk.LabelFrame(main_frame, text="圖像預覽與口述影像文字", labelanchor="nw")
     preview_frame.pack(fill="x", pady=10)
 
     content_frame = ttk.Frame(preview_frame)
@@ -427,28 +577,51 @@ def create_gui():
     image_preview_label = ttk.Label(content_frame)
     image_preview_label.pack(side="left", padx=10, pady=5)
 
-    narration_output_widget = scrolledtext.ScrolledText(content_frame, wrap=tk.WORD, width=60, height=12, state=tk.DISABLED, font=("Consolas", 10))
+    narration_output_widget = scrolledtext.ScrolledText(
+        content_frame,
+        wrap=tk.WORD,
+        width=60,
+        height=12,
+        state=tk.DISABLED,
+        font=("Helvetica", 10),
+    )
     narration_output_widget.pack(side="left", expand=True, fill="both", padx=10, pady=5)
 
     # 影片預覽區
-    video_frame = ttk.LabelFrame(main_frame, text="影片預覽 (靜音顯示，建議點選外部播放以聽到旁白)", padding="10")
+    video_frame = ttk.LabelFrame(main_frame, text="影片預覽", labelanchor="nw")
     video_frame.pack(fill="both", expand=False)
 
     video_preview_label = ttk.Label(video_frame)
-    video_preview_label.pack(pady=6)
+    video_preview_label.pack(pady=8)
 
-    open_external_btn = ttk.Button(video_frame, text="在系統播放器中開啟影片", command=open_video_external)
-    open_external_btn.pack(pady=(0, 6))
+    open_external_btn = ttk.Button(
+        video_frame,
+        text="▶️ 在系統播放器中開啟影片",
+        command=open_video_external,
+        style="Secondary.TButton",
+    )
+    open_external_btn.pack(pady=(0, 8))
+
+    try:
+        ToolTip(open_external_btn, "使用系統預設播放器開啟所產生的影片")
+    except Exception:
+        pass
 
     # 執行結果輸出區
-    result_frame = ttk.LabelFrame(main_frame, text="執行結果與日誌", padding="10")
+    result_frame = ttk.LabelFrame(main_frame, text="執行結果與日誌", labelanchor="nw")
     result_frame.pack(expand=True, fill="both", pady=(10, 0))
-    result_text_widget = scrolledtext.ScrolledText(result_frame, wrap=tk.WORD, height=12, state=tk.DISABLED, font=("Consolas", 9))
+    result_text_widget = scrolledtext.ScrolledText(
+        result_frame, wrap=tk.WORD, height=12, state=tk.DISABLED, font=("Consolas", 9)
+    )
     result_text_widget.pack(expand=True, fill="both")
 
+    # 狀態列與進度列
     status_label_var = tk.StringVar(value="準備就緒")
-    status_bar = ttk.Label(root, textvariable=status_label_var, relief=tk.SUNKEN, anchor=tk.W, padding=(5, 2))
+    status_bar = ttk.Label(root, textvariable=status_label_var, anchor=tk.W, padding=(6, 4), style="Status.TLabel")
     status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+
+    progress_bar = ttk.Progressbar(root, mode="indeterminate")
+    # 初始隱藏，由 set_busy 控制顯示與啟動
 
     return root
 
