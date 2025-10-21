@@ -308,7 +308,7 @@ def step3_refine_and_merge_descriptions(api_key, initial_data, video_summary, no
 
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-pro') 
+        model = genai.GenerativeModel('gemini-2.5-flash') 
         prompt = f"""
 你是一位頂尖的口述影像編輯師，請參考【影片整體摘要】，將下方的【原始描述】進行專業級的優化。
 【核心任務】
