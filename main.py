@@ -589,16 +589,20 @@ def create_gui():
     # --- 功能按鈕區 ---
     btn_frame = ttk.Frame(main_frame)
     btn_frame.pack(fill="x", pady=(5, 10))
-    image_button = ttk.Button(btn_frame, text="🖼️ 生成圖像口述影像", command=start_image_analysis, style="Primary.TButton", width=30)
-    image_button.pack(side="left", expand=True, fill="x", padx=(0, 8))
-    video_button = ttk.Button(btn_frame, text="🎬 生成影片口述影像", command=start_video_analysis, style="Primary.TButton", width=30)
-    video_button.pack(side="left", expand=True, fill="x", padx=(8, 0))
+    image_button = ttk.Button(btn_frame, text="🖼️ 圖像口述", command=start_image_analysis, style="Primary.TButton")
+    image_button.pack(side="left", expand=True, fill="x", padx=(0, 5))
+    video_button = ttk.Button(btn_frame, text="🎬 影片口述", command=start_video_analysis, style="Primary.TButton")
+    video_button.pack(side="left", expand=True, fill="x", padx=(5, 5))
+    realtime_button = ttk.Button(btn_frame, text="📸 即時口述", command=start_realtime_image_analysis, style="Primary.TButton")
+    realtime_button.pack(side="left", expand=True, fill="x", padx=(5, 0))
 
     # --- 工具提示 ---
     try:
         ToolTip(image_button, "點擊以上傳單張圖片並輸入描述，\n使用 Llama 模型生成口述影像。")
         ToolTip(video_button, "點擊以選擇影片檔案，\n使用 Gemini 模型自動生成口述影像。")
-    except Exception as e: print(f"無法建立工具提示: {e}")
+        ToolTip(realtime_button, "使用攝影機即時拍攝一張照片，\n並為其生成口述影像。")
+    except Exception as e:
+        print(f"建立 ToolTip 時發生錯誤: {e}")
 
     # --- 視覺輸出區 ---
     output_area_frame = ttk.Frame(main_frame)
