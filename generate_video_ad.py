@@ -359,14 +359,8 @@ async def _run_tts_tasks(descriptions):
                 print(f"  - (TTS 任務 {index}) 開始生成: '{desc['text'][:20]}...'")
                 communicate = edge_tts.Communicate(desc['text'], VOICE)
                 await communicate.save(desc['audio_path'])
-                # 成功時標記
-                desc['tts_success'] = True
-                except edge_tts.NoAudioReceived:
-                print(f"  - [嚴重] (TTS 任務 {index}) 生成失敗: Edge TTS 未返回任何音訊。可能是網路問題或 API 限制。文字: '{desc['text'][:20]}...'")
-                desc['tts_success'] = False
-                except Exception as e:
-                print(f"  - [警告] (TTS 任務 {index}) 生成時發生未知錯誤: '{desc['text'][:20]}...'。錯誤: {e}")
-                desc['tts_success'] = False
+            except Exception as e:
+                print(f"  - [警告] (TTS 任務 {index}) 生成失敗: '{desc['text'][:20]}...'。錯誤: {e}")
 
     tasks = [safe_tts_task(desc, i + 1) for i, desc in enumerate(descriptions)]
     await asyncio.gather(*tasks)
