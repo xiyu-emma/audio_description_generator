@@ -315,7 +315,7 @@ def run_single_image_narration(model_path: str, image_file: str, user_desc: str)
     print("\n正在生成口述影像...")
     generate_kwargs = {
         "max_new_tokens": 512, "do_sample": True, "top_p": 0.9,
-        "temperature": 0.6, # 稍微降低溫度，讓描述更客觀
+        "temperature": 0.1,
         "pad_token_id": processor.tokenizer.eos_token_id,
         "eos_token_id": processor.tokenizer.eos_token_id,
     }

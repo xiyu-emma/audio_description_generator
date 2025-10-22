@@ -492,7 +492,7 @@ def take_photo_and_generate_ad():
             messagebox.showwarning("輸入錯誤", "圖片描述不能為空。", parent=app_window)
             return
 
-        model_dir = os.path.join(".", "models", "Meta-Llama-3.2-11B-Instruct-Vision")
+        model_dir = os.path.join(".", "models", "Llama-3.2-11B-Vision-Instruct")
         if not os.path.isdir(model_dir):
             messagebox.showerror("缺少模型", f"在相對路徑 '{model_dir}' 下找不到 Llama 模型資料夾。\n請確認模型已下載並放置在正確位置。", parent=app_window)
             return
@@ -535,7 +535,7 @@ def start_image_analysis():
         messagebox.showwarning("輸入錯誤", "圖片描述不能為空。", parent=app_window)
         return
 
-    model_dir = os.path.join(".", "models", "Meta-Llama-3.2-11B-Instruct-Vision")
+    model_dir = os.path.join(".", "models", "Llama-3.2-11B-Vision-Instruct")
     if not os.path.isdir(model_dir):
          messagebox.showerror("缺少模型", f"在相對路徑 '{model_dir}' 下找不到 Llama 模型資料夾。\n請確認模型已下載並放置在正確位置。", parent=app_window)
          return
