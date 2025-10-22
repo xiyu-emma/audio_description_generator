@@ -8,6 +8,7 @@ import os
 import threading
 import time
 import traceback
+import cv2
 
 # --- 語音功能 ---
 try:
@@ -33,6 +34,7 @@ status_label_var = None
 app_window = None
 image_button = None
 video_button = None
+camera_button = None
 image_preview_label = None
 narration_output_widget = None
 video_preview_label = None
@@ -414,6 +416,7 @@ def enable_buttons():
         # 檢查元件是否存在
         if image_button and image_button.winfo_exists(): image_button.config(state=tk.NORMAL)
         if video_button and video_button.winfo_exists(): video_button.config(state=tk.NORMAL)
+        if camera_button and camera_button.winfo_exists(): camera_button.config(state=tk.NORMAL)
     except tk.TclError:
         pass # 視窗可能已關閉
 
@@ -442,6 +445,84 @@ def set_busy(is_busy: bool):
         pass # 視窗可能已關閉
 
 # --- 啟動流程 ---
+def take_photo_and_generate_ad():
+    """開啟攝像頭拍照並啟動後續的口述影像生成流程"""
+    global _last_selected_image_path
+    
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        messagebox.showerror("攝像頭錯誤", "無法開啟攝像頭。請檢查攝像頭是否已連接並被其他應用程式佔用。", parent=app_window)
+        return
+
+    cv2.namedWindow("拍照 (按 's' 儲存, 'q' 退出)")
+    
+    img_counter = 0
+    img_path = None
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            messagebox.showerror("攝像頭錯誤", "無法讀取攝像頭畫面。", parent=app_window)
+            break
+        cv2.imshow("拍照 (按 's' 儲存, 'q' 退出)", frame)
+
+        k = cv2.waitKey(1) & 0xFF
+        if k == ord('s'):
+            img_name = f"opencv_frame_{img_counter}.png"
+            img_path = os.path.join(os.path.dirname(__file__), "captured_images", img_name)
+            
+            # 確保 captured_images 資料夾存在
+            os.makedirs(os.path.dirname(img_path), exist_ok=True)
+            
+            cv2.imwrite(img_path, frame)
+            print(f"圖片已儲存至 {img_path}")
+            speak(f"圖片已儲存")
+            img_counter += 1
+            break
+        elif k == ord('q'):
+            break
+            
+    cap.release()
+    cv2.destroyAllWindows()
+
+    if img_path:
+        desc = simpledialog.askstring("圖片描述", "請輸入這張圖片的描述或重點：", parent=app_window)
+        if desc is None: return
+        if not desc.strip():
+            messagebox.showwarning("輸入錯誤", "圖片描述不能為空。", parent=app_window)
+            return
+
+        model_dir = os.path.join(".", "models", "Meta-Llama-3.2-11B-Instruct-Vision")
+        if not os.path.isdir(model_dir):
+            messagebox.showerror("缺少模型", f"在相對路徑 '{model_dir}' 下找不到 Llama 模型資料夾。\n請確認模型已下載並放置在正確位置。", parent=app_window)
+            return
+
+        _last_selected_image_path = img_path
+
+        # 清理舊輸出
+        if result_text_widget and result_text_widget.winfo_exists():
+            try: result_text_widget.config(state=tk.NORMAL); result_text_widget.delete('1.0', tk.END); result_text_widget.config(state=tk.DISABLED)
+            except tk.TclError: pass
+        if narration_output_widget and narration_output_widget.winfo_exists():
+            try: narration_output_widget.config(state=tk.NORMAL); narration_output_widget.delete('1.0', tk.END); narration_output_widget.config(state=tk.DISABLED)
+            except tk.TclError: pass
+        if image_preview_label and image_preview_label.winfo_exists():
+            try: image_preview_label.config(image=''); image_preview_label.image = None
+            except tk.TclError: pass
+        stop_video_playback()
+
+        # 禁用按鈕並設定忙碌
+        try:
+            if image_button and image_button.winfo_exists(): image_button.config(state=tk.DISABLED)
+            if video_button and video_button.winfo_exists(): video_button.config(state=tk.DISABLED)
+            if camera_button and camera_button.winfo_exists(): camera_button.config(state=tk.DISABLED)
+        except tk.TclError: pass
+        set_busy(True)
+
+        args = ["--model_path", model_dir, "--image_file", img_path, "--desc", desc]
+        thread = threading.Thread(target=run_script_in_thread, args=('generate_image_ad.py', '圖像', args), daemon=True)
+        thread.start()
+
 def start_image_analysis():
     # (此函式基本不變，已包含相關檢查)
     global _last_selected_image_path
@@ -498,161 +579,131 @@ def start_video_analysis():
         except tk.TclError: pass
     stop_video_playback()
 
-    # 禁用按鈕並設定忙碌
+    file_path = filedialog.askopenfilename(
+        title="請選擇一個影片",
+        filetypes=[("Video Files", "*.mp4 *.avi *.mov *.mkv")]
+    )
+    if not file_path: return
+
+    # 禁用按鈕
     try:
         if image_button and image_button.winfo_exists(): image_button.config(state=tk.DISABLED)
         if video_button and video_button.winfo_exists(): video_button.config(state=tk.DISABLED)
     except tk.TclError: pass
     set_busy(True)
 
-    args = []
+    args = ["--video_path", file_path]
     thread = threading.Thread(target=run_script_in_thread, args=('generate_video_ad.py', '影片', args), daemon=True)
     thread.start()
 
-# --- 語音互動迴圈 ---
-def voice_interaction_loop():
-    # (加入 app_window 檢查)
-    if not VOICE_ENABLED: return
-    time.sleep(1.5)
-    # 檢查視窗是否存在
-    if not app_window or not app_window.winfo_exists(): return
-    speak("歡迎使用口述影像生成系統")
-    session_active = True
-    while session_active:
-        # 再次檢查視窗
-        if not app_window or not app_window.winfo_exists(): break
-        prompt = "請說出指令：生成圖像、生成影片，或 結束"
-        command = voice_input(prompt)
-        if not command: continue
-        # 再次檢查視窗
-        if not app_window or not app_window.winfo_exists(): break
-
-        parsed = VoiceCommands.parse(command)
-        if parsed == "image": app_window.after(0, start_image_analysis)
-        elif parsed == "video": app_window.after(0, start_video_analysis)
-        elif parsed == "exit":
-            speak("感謝您的使用，系統即將關閉")
-            if VOICE_ENABLED: audio.beep_success()
-            if app_window and app_window.winfo_exists(): app_window.destroy()
-            session_active = False
-        else:
-            speak("無法辨識指令，請重新說一次")
-            if VOICE_ENABLED: audio.beep_error()
-
 # --- GUI 建立 ---
-def create_gui():
-    # (此函式已包含 status_bar 的 global 宣告，無需修改 Tooltip 之外的部分)
-    global result_text_widget, status_label_var, app_window
-    global image_button, video_button, progress_bar
-    global image_preview_label, narration_output_widget, video_preview_label
-    global status_bar # 已加入
+def create_main_window():
+    """建立並設定主應用程式視窗"""
+    global result_text_widget, status_label_var, app_window, image_button, video_button, \
+           image_preview_label, narration_output_widget, video_preview_label, progress_bar, status_bar, \
+           camera_button
 
-    root = tk.Tk()
-    app_window = root
-    root.title("口述影像生成系統")
-    root.geometry("1000x780")
-    root.minsize(900, 680)
+    app_window = tk.Tk()
+    app_window.title("智慧口述影像生成工具")
+    app_window.geometry("1280x800")
+    app_window.configure(bg="#030712") # 深色背景
 
-    # --- 主題與色彩 ---
+    # --- 風格設定 ---
     style = ttk.Style()
-    try: style.theme_use("clam")
-    except Exception: pass
-    ACCENT, ACCENT_HOVER, BG, TEXT, SUBTEXT, BORDER = "#4F46E5", "#4338CA", "#F8FAFC", "#111827", "#6B7280", "#E5E7EB"
-    try: root.configure(background=BG)
-    except tk.TclError: pass
+    style.theme_use('clam')
+    style.configure("TFrame", background="#030712")
+    style.configure("TLabel", background="#030712", foreground="white", font=("Helvetica", 10))
+    style.configure("TButton", background="#1f2937", foreground="white", font=("Helvetica", 10, "bold"), borderwidth=1, focusthickness=3, focuscolor='#4f46e5')
+    style.map("TButton", background=[('active', '#374151')])
+    style.configure("Accent.TButton", background="#4f46e5", foreground="white", font=("Helvetica", 11, "bold"))
+    style.map("Accent.TButton", background=[('active', '#4338ca')])
+    style.configure("TProgressbar", background="#4f46e5", troughcolor="#1f2937")
 
-    # --- 設定元件樣式 ---
-    style.configure("TFrame", background=BG)
-    style.configure("TLabel", background=BG, foreground=TEXT, font=("Helvetica", 10))
-    style.configure("Header.TLabel", background=BG, foreground=TEXT, font=("Helvetica", 20, "bold"))
-    style.configure("SubHeader.TLabel", background=BG, foreground=SUBTEXT, font=("Helvetica", 11))
-    style.configure("TLabelFrame", background=BG, foreground=TEXT, bordercolor=BORDER, relief=tk.SOLID, borderwidth=1)
-    style.configure("TLabelFrame.Label", background=BG, foreground=TEXT, font=("Helvetica", 11, "bold"))
-    style.configure("TButton", font=("Helvetica", 12), padding=(12, 10), borderwidth=1)
-    style.configure("Primary.TButton", background=ACCENT, foreground="white", relief=tk.FLAT)
-    style.map("Primary.TButton", background=[("active", ACCENT_HOVER), ("disabled", "#9CA3AF")], foreground=[("disabled", "#E5E7EB")])
-    style.configure("Secondary.TButton", background="#E5E7EB", foreground=TEXT, relief=tk.FLAT)
-    style.map("Secondary.TButton", background=[("active", "#D1D5DB")])
-    style.configure("Horizontal.TProgressbar", troughcolor=BORDER, background=ACCENT)
-    style.configure("Status.TLabel", background="#1F2937", foreground="#D1D5DB", font=("Consolas", 9))
+    # --- 主框架 ---
+    main_frame = ttk.Frame(app_window, padding="20")
+    main_frame.pack(fill=tk.BOTH, expand=True)
 
-    # --- 主要容器 ---
-    main_frame = ttk.Frame(root, padding=20)
-    main_frame.pack(expand=True, fill="both")
+    # --- 頂部按鈕區域 ---
+    button_frame = ttk.Frame(main_frame)
+    button_frame.pack(fill=tk.X, pady=(0, 20))
 
-    # --- 標題區 ---
-    header_label = ttk.Label(main_frame, text="口述影像生成系統", style="Header.TLabel")
-    header_label.pack(anchor="w")
-    subheader_label = ttk.Label(main_frame, text="為圖像與影片生成高品質的口述影像旁白", style="SubHeader.TLabel")
-    subheader_label.pack(anchor="w", pady=(0, 15))
+    image_button = ttk.Button(button_frame, text="從圖片生成口述影像", command=start_image_analysis, style="Accent.TButton")
+    image_button.pack(side=tk.LEFT, padx=10, pady=10)
+    ToolTip(image_button, "從本地選擇一張圖片，並根據您的描述生成口述影像。")
 
-    # --- 功能按鈕區 ---
-    btn_frame = ttk.Frame(main_frame)
-    btn_frame.pack(fill="x", pady=(5, 10))
-    image_button = ttk.Button(btn_frame, text="🖼️ 圖像口述", command=start_image_analysis, style="Primary.TButton")
-    image_button.pack(side="left", expand=True, fill="x", padx=(0, 5))
-    video_button = ttk.Button(btn_frame, text="🎬 影片口述", command=start_video_analysis, style="Primary.TButton")
-    video_button.pack(side="left", expand=True, fill="x", padx=(5, 5))
-    realtime_button = ttk.Button(btn_frame, text="📸 即時口述", command=start_realtime_image_analysis, style="Primary.TButton")
-    realtime_button.pack(side="left", expand=True, fill="x", padx=(5, 0))
+    camera_button = ttk.Button(button_frame, text="拍照生成口述影像", command=take_photo_and_generate_ad, style="Accent.TButton")
+    camera_button.pack(side=tk.LEFT, padx=10, pady=10)
+    ToolTip(camera_button, "開啟攝像頭拍照，並根據您的描述生成口述影像。")
 
-    # --- 工具提示 ---
-    try:
-        ToolTip(image_button, "點擊以上傳單張圖片並輸入描述，\n使用 Llama 模型生成口述影像。")
-        ToolTip(video_button, "點擊以選擇影片檔案，\n使用 Gemini 模型自動生成口述影像。")
-        ToolTip(realtime_button, "使用攝影機即時拍攝一張照片，\n並為其生成口述影像。")
-    except Exception as e:
-        print(f"建立 ToolTip 時發生錯誤: {e}")
+    video_button = ttk.Button(button_frame, text="從影片生成口述影像", command=start_video_analysis)
+    video_button.pack(side=tk.LEFT, padx=10, pady=10)
+    ToolTip(video_button, "從本地選擇一段影片，自動分析內容並生成完整的口述影像。")
 
-    # --- 視覺輸出區 ---
-    output_area_frame = ttk.Frame(main_frame)
-    output_area_frame.pack(expand=True, fill="both", pady=10)
-    image_output_frame = ttk.LabelFrame(output_area_frame, text="圖像結果預覽", labelanchor="n", padding=10)
-    image_output_frame.pack(side="left", expand=True, fill="both", padx=(0, 10))
-    image_preview_label = ttk.Label(image_output_frame, text="[此處顯示圖片預覽]", anchor=tk.CENTER, background=BORDER) # 用BORDER色
-    image_preview_label.pack(fill="x", pady=(5, 10))
-    ttk.Label(image_output_frame, text="生成的口述影像:", font=("Helvetica", 10, "bold")).pack(anchor="w", pady=(5,2))
-    narration_output_widget = scrolledtext.ScrolledText(image_output_frame, wrap=tk.WORD, height=6, state=tk.DISABLED, font=("Helvetica", 10), relief=tk.SOLID, borderwidth=1, bd=1)
-    narration_output_widget.pack(expand=True, fill="both")
+    # --- 內容分割區域 ---
+    content_paned_window = tk.PanedWindow(main_frame, orient=tk.HORIZONTAL, bg="#111827", sashwidth=8)
+    content_paned_window.pack(fill=tk.BOTH, expand=True)
 
-    video_output_frame = ttk.LabelFrame(output_area_frame, text="影片結果預覽", labelanchor="n", padding=10)
-    video_output_frame.pack(side="left", expand=True, fill="both", padx=(10, 0))
-    video_preview_label = ttk.Label(video_output_frame, text="[此處顯示影片預覽]", anchor=tk.CENTER, background=BORDER) # 用BORDER色
-    video_preview_label.pack(fill="x", pady=(5, 10))
-    open_external_btn = ttk.Button(video_output_frame, text="▶️ 在系統播放器中開啟", command=open_video_external, style="Secondary.TButton")
-    open_external_btn.pack(pady=(5, 5))
-    try: ToolTip(open_external_btn, "使用系統預設播放器開啟生成的影片檔案")
-    except Exception: pass
+    # --- 左側預覽區域 ---
+    preview_frame = ttk.Frame(content_paned_window, width=600)
+    content_paned_window.add(preview_frame, stretch="always")
 
-    # --- 執行日誌輸出區 ---
-    result_frame = ttk.LabelFrame(main_frame, text="執行日誌", labelanchor="n", padding=10)
-    result_frame.pack(expand=True, fill="both", pady=(10, 0))
-    result_text_widget = scrolledtext.ScrolledText(result_frame, wrap=tk.WORD, height=10, state=tk.DISABLED, font=("Consolas", 9), relief=tk.SOLID, borderwidth=1, bd=1, background="#F9FAFB", foreground="#374151")
-    result_text_widget.pack(expand=True, fill="both")
+    # 圖片預覽
+    image_preview_label = tk.Label(preview_frame, text="圖片預覽區", bg="#111827", fg="grey", height=15)
+    image_preview_label.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 5))
+    ttk.Label(preview_frame, text="--- 或 ---").pack()
+    # 影片預覽
+    video_preview_label = tk.Label(preview_frame, text="影片預覽區", bg="#111827", fg="grey", height=15)
+    video_preview_label.pack(fill=tk.BOTH, expand=True, padx=10, pady=(5, 0))
 
-    # --- 狀態列與進度列 ---
-    status_label_var = tk.StringVar(value="準備就緒")
-    status_bar = ttk.Label(root, textvariable=status_label_var, anchor=tk.W, padding=(8, 5), style="Status.TLabel")
-    status_bar.pack(side=tk.BOTTOM, fill=tk.X)
-    progress_bar = ttk.Progressbar(root, mode="indeterminate", style="Horizontal.TProgressbar")
+    # --- 右側輸出區域 ---
+    output_frame = ttk.Frame(content_paned_window, width=600)
+    content_paned_window.add(output_frame, stretch="always")
 
-    return root
+    # 生成的口述影像文字
+    ttk.Label(output_frame, text="生成的口述影像文字:", font=("Helvetica", 12, "bold")).pack(anchor=tk.W, pady=(0, 5))
+    narration_output_widget = scrolledtext.ScrolledText(output_frame, wrap=tk.WORD, height=10,
+                                                       bg="#1f2937", fg="white", insertbackground="white",
+                                                       state=tk.DISABLED, relief=tk.FLAT, borderwidth=2)
+    narration_output_widget.pack(fill=tk.BOTH, expand=True)
 
-# --- 程式主進入點 ---
-if __name__ == "__main__":
-    app_window = create_gui()
+    # --- 底部日誌區域 ---
+    log_frame = ttk.Frame(main_frame)
+    log_frame.pack(fill=tk.BOTH, expand=True, pady=(20, 0))
+    ttk.Label(log_frame, text="執行日誌:", font=("Helvetica", 12, "bold")).pack(anchor=tk.W, pady=(0, 5))
+    result_text_widget = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, height=10,
+                                                   bg="#1f2937", fg="#a5b4fc", insertbackground="white",
+                                                   state=tk.DISABLED, relief=tk.FLAT, borderwidth=2)
+    result_text_widget.pack(fill=tk.BOTH, expand=True)
+    
+    # --- 狀態列和進度條 ---
+    # 進度條 (預設隱藏)
+    progress_bar = ttk.Progressbar(main_frame, mode='indeterminate', style="TProgressbar")
+    
+    # 狀態列
+    status_bar = ttk.Frame(main_frame)
+    status_bar.pack(side=tk.BOTTOM, fill=tk.X, pady=(5,0))
+    status_label_var = tk.StringVar()
+    status_label = ttk.Label(status_bar, textvariable=status_label_var)
+    status_label.pack(side=tk.LEFT)
+    status_label_var.set("就緒")
 
-    if VOICE_ENABLED:
-        voice_thread = threading.Thread(target=voice_interaction_loop, daemon=True)
-        voice_thread.start()
-    else:
-        update_status_safe("語音功能未啟用")
+    return app_window
 
-    # 綁定關閉視窗事件
-    app_window.protocol("WM_DELETE_WINDOW", lambda: (stop_video_playback(), app_window.destroy()))
-
-    app_window.mainloop()
-
+def on_closing():
+    """處理視窗關閉事件"""
+    if messagebox.askokcancel("退出", "您確定要退出應用程式嗎?", parent=app_window):
+        app_window.destroy()
+    
     # 清理資源
     stop_video_playback()
     print("應用程式已關閉。")
+
+if __name__ == "__main__":
+    app_window = create_main_window()
+    app_window.protocol("WM_DELETE_WINDOW", on_closing)
+    try:
+        app_window.mainloop()
+    except KeyboardInterrupt:
+        print("應用程式被使用者中斷。")
+    finally:
+        on_closing()
